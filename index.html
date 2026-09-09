@@ -416,7 +416,7 @@
           <h3>☁️ Sincronización entre dispositivos (Cloudflare, gratis)</h3>
           <div class="sub-hint">Guarda tus datos en un Cloudflare Worker + KV para verlos igual en el móvil y el ordenador. Necesitas crear el Worker una vez (te doy el código e instrucciones abajo) y pegar aquí su URL y el token secreto que le pongas.</div>
           <div class="field"><label>URL del Worker</label><input type="text" id="syncUrl" placeholder="https://journal-sync.tu-subdominio.workers.dev"></div>
-          <div class="field"><label>Token secreto (el mismo que pongas en el Worker)</label><input type="password" id="syncToken" placeholder="Ej: 8f2a1c..."></div>
+          <div class="field"><label>Token secreto (el mismo que pongas en el Worker)</label><input type="text" autocomplete="off" id="syncToken" placeholder="Ej: 8f2a1c..."></div>
           <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
             <button id="syncSaveCfg">Guardar configuración</button>
             <button class="primary" id="syncPushBtn">☁️ Subir a la nube</button>
