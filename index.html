@@ -136,6 +136,11 @@
   .kpi-mini{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;}
   .kpi-mini .m{background:var(--panel-2);border:1px solid var(--border);border-radius:8px;padding:8px 14px;font-size:12px;color:var(--text-dim);}
   .kpi-mini .m b{color:var(--text);display:block;font-size:15px;}
+  .chart-tooltip{position:fixed;pointer-events:none;background:#0d1420;border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-size:12px;line-height:1.5;color:var(--text);box-shadow:0 8px 24px rgba(0,0,0,.45);z-index:9999;opacity:0;transition:opacity .1s;white-space:nowrap;}
+  .chart-tooltip.show{opacity:1;}
+  .chart-tooltip b{color:#fff;}
+  .legend-row{display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;font-size:12px;color:var(--text-dim);}
+  .legend-row .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;}
 
   .setup-card{background:var(--panel);border:1px solid var(--border);border-top:3px solid var(--purple);border-radius:10px;padding:16px 18px;}
   .setup-card .sc-head{display:flex;justify-content:space-between;align-items:flex-start;}
@@ -197,6 +202,15 @@
       <h2>Sin datos importados</h2>
       <div>Sube tu export de Tradovate desde el panel lateral. Para P&amp;L exacto usa <b>Performance.csv</b> (Informes de cuenta → Descargar CSV); Orders.csv es opcional y solo añade contexto (canceladas, rechazadas, posiciones abiertas).</div>
       <button class="primary" id="emptyManualBtn" style="margin-top:14px;">+ Añadir operación manual</button>
+
+      <div class="panel" style="max-width:480px;margin:28px auto 0;text-align:left;">
+        <h3>☁️ ¿Ya subiste tus datos desde otro dispositivo?</h3>
+        <div class="sub-hint">Descárgalos aquí directamente, sin necesidad de volver a importar el CSV.</div>
+        <div class="field"><label>URL del Worker</label><input type="text" id="syncUrlEmpty" placeholder="https://journal-sync.tu-subdominio.workers.dev"></div>
+        <div class="field"><label>Token secreto</label><input type="password" id="syncTokenEmpty" placeholder="El mismo token que pusiste en el Worker"></div>
+        <button class="primary" id="syncPullBtnEmpty">⬇ Descargar de la nube</button>
+        <div class="sub-hint" id="syncStatusEmpty" style="margin-top:8px;"></div>
+      </div>
     </div>
 
     <div id="content" style="display:none;">
@@ -277,11 +291,32 @@
       <!-- ============ STATS ============ -->
       <div class="view" id="view-stats">
         <h1 class="page-title">Estadísticas avanzadas</h1>
-        <div class="page-sub">Desglose por día, hora, setup, contrato y R-multiple</div>
+        <div class="page-sub">Desglose por día, hora, mes, setup, contrato, R-multiple y proyección. Pasa el ratón por cualquier barra, punto o segmento para ver el detalle.</div>
 
         <div class="row2">
           <div class="panel"><h3>P&amp;L por día de la semana</h3><div class="svg-wrap"><svg id="dowChart" width="100%" height="200"></svg></div></div>
           <div class="panel"><h3>P&amp;L por hora del día</h3><div class="svg-wrap"><svg id="hourChart" width="100%" height="200"></svg></div></div>
+        </div>
+
+        <div class="row2">
+          <div class="panel"><h3>P&amp;L por mes</h3><div class="svg-wrap"><svg id="monthChart" width="100%" height="200"></svg></div></div>
+          <div class="panel">
+            <h3>Ganadoras vs perdedoras</h3>
+            <div class="svg-wrap"><svg id="winLossChart" width="100%" height="200"></svg></div>
+            <div class="legend-row" id="winLossLegend"></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h3>Métricas avanzadas</h3>
+          <div class="grid" id="advancedMetrics"></div>
+        </div>
+
+        <div class="panel">
+          <h3>Proyección a futuro</h3>
+          <div class="sub-hint">Extrapolación estadística simple basada en tu P&amp;L medio por día operado histórico. No es una garantía de resultados futuros — es solo una lectura de tu ritmo actual.</div>
+          <div id="projectionPanel" class="kpi-mini"></div>
+          <div class="svg-wrap"><svg id="projectionChart" width="100%" height="200"></svg></div>
         </div>
 
         <div class="panel">
@@ -409,7 +444,7 @@
 
         <div class="panel">
           <h3>Cuentas importadas</h3>
-          <table id="accountsTable"><thead><tr><th>Cuenta</th><th>Filas</th><th>Trades cerrados</th><th>Net P&amp;L</th></tr></thead><tbody></tbody></table>
+          <table id="accountsTable"><thead><tr><th>Cuenta</th><th>Filas</th><th>Trades cerrados</th><th>Net P&amp;L</th><th>Acciones</th></tr></thead><tbody></tbody></table>
         </div>
 
         <div class="panel">
@@ -505,6 +540,7 @@
 </div>
 
 <div id="toast"></div>
+<div id="chartTooltip" class="chart-tooltip"></div>
 
 <!-- ============ MODAL: OPERACIÓN MANUAL ============ -->
 <div class="modal-overlay" id="manualModal">
@@ -905,6 +941,32 @@
     });
   }
 
+  // ---------- tooltips genéricos para gráficos SVG ----------
+  function esc(str){ return String(str).replace(/&/g,'&amp;').replace(/"/g,'&quot;'); }
+  function showChartTooltip(evt, html){
+    const tt = document.getElementById('chartTooltip');
+    tt.innerHTML = html;
+    tt.classList.add('show');
+    positionChartTooltip(evt);
+  }
+  function positionChartTooltip(evt){
+    const tt = document.getElementById('chartTooltip');
+    const pad = 14;
+    let x = evt.clientX + pad, y = evt.clientY + pad;
+    const rect = tt.getBoundingClientRect();
+    if(x + rect.width > window.innerWidth - 8) x = evt.clientX - rect.width - pad;
+    if(y + rect.height > window.innerHeight - 8) y = evt.clientY - rect.height - pad;
+    tt.style.left = x+'px'; tt.style.top = y+'px';
+  }
+  function hideChartTooltip(){ document.getElementById('chartTooltip').classList.remove('show'); }
+  function attachChartTooltips(svgEl){
+    svgEl.querySelectorAll('[data-tt]').forEach(el=>{
+      el.addEventListener('mousemove', e=>showChartTooltip(e, el.dataset.tt));
+      el.addEventListener('mouseenter', e=>showChartTooltip(e, el.dataset.tt));
+      el.addEventListener('mouseleave', hideChartTooltip);
+    });
+  }
+
   // ---------- mini charts SVG ----------
   function barChart(svgEl, data, opts){
     opts = opts||{};
@@ -920,7 +982,9 @@
       const w = bw*0.7;
       const h = Math.abs(d.value)/maxAbs * (H-padT-padB)/2;
       const y = d.value>=0 ? zeroY-h : zeroY;
-      bars += '<rect x="'+x+'" y="'+y+'" width="'+w+'" height="'+Math.max(h,1)+'" rx="3" fill="'+(d.value>=0?'#2dd4a7':'#ef5b6e')+'" opacity="0.9"/>';
+      const ttLabel = (d.tooltipLabel!=null ? d.tooltipLabel : d.label) || '';
+      const ttHtml = '<b>'+esc(ttLabel)+'</b><br>'+fmtMoney(d.value)+(d.count!=null?(' · '+d.count+' op.'):'');
+      bars += '<rect class="chart-hit" data-tt="'+esc(ttHtml)+'" x="'+x+'" y="'+y+'" width="'+w+'" height="'+Math.max(h,1)+'" rx="3" fill="'+(d.value>=0?'#2dd4a7':'#ef5b6e')+'" opacity="0.9" style="cursor:pointer;"/>';
       labels += '<text x="'+(x+w/2)+'" y="'+(H-8)+'" fill="#5c6b80" font-size="10" text-anchor="middle">'+d.label+'</text>';
     });
     svgEl.setAttribute('viewBox','0 0 '+W+' '+H);
@@ -928,6 +992,7 @@
       '<line x1="'+padL+'" y1="'+zeroY+'" x2="'+W+'" y2="'+zeroY+'" stroke="#1f2b3d"/>'+
       '<text x="4" y="'+(zeroY+4)+'" fill="#5c6b80" font-size="10">$0</text>'+
       bars + labels;
+    attachChartTooltips(svgEl);
   }
 
   function radarChart(svgEl, axes){
@@ -954,10 +1019,40 @@
                 '<text x="'+lx+'" y="'+(ly+13)+'" fill="#e6edf5" font-size="11" font-weight="700" text-anchor="middle">'+Math.round(a.value)+'</text>';
     });
     const poly = axes.map((a,i)=>pt(i,a.value).join(',')).join(' ');
+    const vertexHits = axes.map((a,i)=>{
+      const [px,py] = pt(i,a.value);
+      const ttHtml = '<b>'+esc(a.label)+'</b><br>'+Math.round(a.value)+' / 100';
+      return '<circle class="chart-hit" data-tt="'+esc(ttHtml)+'" cx="'+px+'" cy="'+py+'" r="8" fill="transparent" style="cursor:pointer;"/>';
+    }).join('');
     svgEl.setAttribute('viewBox','0 0 '+W+' '+H);
     svgEl.innerHTML = rings+axisLines+
       '<polygon points="'+poly+'" fill="rgba(139,108,241,.28)" stroke="#8b6cf1" stroke-width="2"/>'+
-      labels;
+      labels + vertexHits;
+    attachChartTooltips(svgEl);
+  }
+
+  // donut/pie chart — segments: [{label,value,color}]
+  function donutChart(svgEl, segments){
+    const total = segments.reduce((s,d)=>s+d.value,0);
+    const W = svgEl.parentElement.clientWidth || 260, H = 200;
+    const cx=W/2, cy=H/2, r=70, sw=26;
+    const circumference = 2*Math.PI*r;
+    if(!total){ svgEl.innerHTML=''; return; }
+    let offset=0, arcs='';
+    segments.forEach(seg=>{
+      const frac = seg.value/total;
+      const len = frac*circumference;
+      const ttHtml = '<b>'+esc(seg.label)+'</b><br>'+seg.value+' ('+(frac*100).toFixed(1)+'%)';
+      arcs += '<circle class="chart-hit" cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="none" stroke="'+seg.color+'" stroke-width="'+sw+'" '+
+        'stroke-dasharray="'+len+' '+(circumference-len)+'" stroke-dashoffset="'+(-offset)+'" transform="rotate(-90 '+cx+' '+cy+')" '+
+        'data-tt="'+esc(ttHtml)+'" style="cursor:pointer;"/>';
+      offset += len;
+    });
+    svgEl.setAttribute('viewBox','0 0 '+W+' '+H);
+    svgEl.innerHTML = arcs +
+      '<text x="'+cx+'" y="'+(cy-4)+'" fill="#e6edf5" font-size="20" font-weight="700" text-anchor="middle">'+total+'</text>'+
+      '<text x="'+cx+'" y="'+(cy+16)+'" fill="#5c6b80" font-size="11" text-anchor="middle">operaciones</text>';
+    attachChartTooltips(svgEl);
   }
 
   // ---------- métricas ----------
@@ -1124,7 +1219,7 @@
     const sorted=[...trades].sort((a,b)=>a.closeTime-b.closeTime);
     if(!sorted.length){ svg.innerHTML=''; return; }
     const W=Math.max(500, svg.parentElement.clientWidth||600), H=220, padL=60, padB=20, padT=10;
-    let cum=0; const pts=sorted.map((t,i)=>{ cum+=t.pnl; return {x:i, y:cum}; });
+    let cum=0; const pts=sorted.map((t,i)=>{ cum+=t.pnl; return {x:i, y:cum, t}; });
     const minY=Math.min(0,...pts.map(p=>p.y)), maxY=Math.max(0,...pts.map(p=>p.y));
     const range=(maxY-minY)||1;
     const x = i => padL + (i/(pts.length-1||1))*(W-padL-10);
@@ -1135,10 +1230,25 @@
       '<line x1="'+padL+'" y1="'+y(v)+'" x2="'+W+'" y2="'+y(v)+'" stroke="#1f2b3d" stroke-width="1"/>'+
       '<text x="4" y="'+(y(v)+4)+'" fill="#5c6b80" font-size="10">'+fmtMoneyPlain(v)+'</text>'
     ).join('');
+    // círculos invisibles en cada operación para poder pasar el ratón por cualquier punto de la curva
+    const hitPoints = pts.map(p=>{
+      const ttHtml = '<b>'+esc(new Date(p.t.closeTime).toLocaleString('es-ES'))+'</b><br>'+esc(p.t.contract+' · '+p.t.side)+
+        '<br>Operación: <span style="color:'+(p.t.pnl>=0?'#2dd4a7':'#ef5b6e')+'">'+fmtMoney(p.t.pnl)+'</span><br>Acumulado: '+fmtMoney(p.y);
+      return '<circle class="chart-hit" data-tt="'+esc(ttHtml)+'" cx="'+x(p.x)+'" cy="'+y(p.y)+'" r="7" fill="transparent" style="cursor:pointer;"/>';
+    }).join('');
     svg.setAttribute('viewBox','0 0 '+W+' '+H);
     svg.innerHTML = gridLines +
       '<path d="'+path+'" fill="none" stroke="'+(last.y>=0?'#2dd4a7':'#ef5b6e')+'" stroke-width="2"/>'+
-      '<circle cx="'+x(last.x)+'" cy="'+y(last.y)+'" r="3.5" fill="'+(last.y>=0?'#2dd4a7':'#ef5b6e')+'"/>';
+      '<circle cx="'+x(last.x)+'" cy="'+y(last.y)+'" r="3.5" fill="'+(last.y>=0?'#2dd4a7':'#ef5b6e')+'"/>'+
+      hitPoints;
+    attachChartTooltips(svg);
+  }
+
+  function monthKey(ms){ const d=new Date(ms); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); }
+  function monthLabel(k){
+    const [y,m] = k.split('-').map(Number);
+    const names=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+    return names[m-1]+' '+y;
   }
 
   function renderMultTable(){
@@ -1172,9 +1282,57 @@
       const rowsCount = rawRows.filter(r=>r['Account']===acc).length + perfRows.filter(r=>r['Account']===acc).length + manualTrades.filter(t=>t.account===acc).length;
       const trades = allTrades.filter(t=>t.account===acc);
       const net = trades.reduce((s,t)=>s+t.pnl,0);
-      return '<tr><td>'+acc+'</td><td>'+rowsCount+'</td><td>'+trades.length+'</td><td class="'+(net>=0?'pos':'neg')+'">'+fmtMoney(net)+'</td></tr>';
+      return '<tr><td>'+acc+'</td><td>'+rowsCount+'</td><td>'+trades.length+'</td><td class="'+(net>=0?'pos':'neg')+'">'+fmtMoney(net)+'</td>'+
+        '<td><span class="acc-rename" data-acc="'+esc(acc)+'" title="Renombrar cuenta" style="cursor:pointer;margin-right:14px;">✎ Renombrar</span>'+
+        '<span class="acc-del" data-acc="'+esc(acc)+'" title="Eliminar cuenta y todos sus datos" style="cursor:pointer;color:var(--red);">🗑 Eliminar</span></td></tr>';
     }).join('');
-    document.querySelector('#accountsTable tbody').innerHTML = body;
+    document.querySelector('#accountsTable tbody').innerHTML = body || '<tr><td colspan="5" class="sub-hint">Sin cuentas importadas.</td></tr>';
+    document.querySelectorAll('#accountsTable .acc-rename').forEach(el=>{
+      el.addEventListener('click', ()=>{
+        const old = el.dataset.acc;
+        const name = prompt('Nuevo nombre para la cuenta "'+old+'":', old);
+        if(!name || !name.trim() || name.trim()===old) return;
+        renameAccount(old, name.trim());
+      });
+    });
+    document.querySelectorAll('#accountsTable .acc-del').forEach(el=>{
+      el.addEventListener('click', ()=>{
+        const acc = el.dataset.acc;
+        if(!confirm('¿Eliminar la cuenta "'+acc+'" y TODAS sus operaciones (Orders, Performance y manuales)? Esta acción no se puede deshacer.')) return;
+        deleteAccount(acc);
+      });
+    });
+  }
+
+  // renombra una cuenta en todas las fuentes de datos y migra las claves de tradeMeta que llevan el nombre incrustado
+  function renameAccount(oldName, newName){
+    rawRows.forEach(r=>{ if(r['Account']===oldName) r['Account']=newName; });
+    perfRows.forEach(r=>{ if(r['Account']===oldName) r['Account']=newName; });
+    manualTrades.forEach(t=>{ if(t.account===oldName) t.account=newName; });
+    const newMeta = {};
+    Object.keys(tradeMeta).forEach(id=>{
+      let newId = id;
+      if(id.startsWith('perf|'+oldName+'|')){ newId = 'perf|'+newName+id.slice(('perf|'+oldName).length); }
+      else if(id.startsWith(oldName+'|')){ newId = newName+id.slice(oldName.length); }
+      newMeta[newId] = tradeMeta[id];
+    });
+    tradeMeta = newMeta;
+    process();
+    toast('Cuenta renombrada a "'+newName+'".');
+  }
+
+  // elimina una cuenta y todos sus datos (filas de Orders/Performance, operaciones manuales y su playbook asociado)
+  function deleteAccount(name){
+    rawRows = rawRows.filter(r=>r['Account']!==name);
+    perfRows = perfRows.filter(r=>r['Account']!==name);
+    const manualIdsToRemove = manualTrades.filter(t=>t.account===name).map(t=>t.id);
+    manualTrades = manualTrades.filter(t=>t.account!==name);
+    manualIdsToRemove.forEach(id=>delete tradeMeta[id]);
+    Object.keys(tradeMeta).forEach(id=>{
+      if(id.startsWith(name+'|') || id.startsWith('perf|'+name+'|')) delete tradeMeta[id];
+    });
+    process();
+    toast('Cuenta "'+name+'" eliminada.');
   }
 
   function renderCalendar(trades){
@@ -1304,13 +1462,34 @@
   // ---------- stats view ----------
   function renderStats(trades){
     const dowNames=['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
-    const byDow = Array.from({length:7},()=>0);
-    trades.forEach(t=>{ byDow[new Date(t.closeTime).getDay()] += t.pnl; });
-    barChart(document.getElementById('dowChart'), dowNames.map((l,i)=>({label:l,value:byDow[i]})));
+    const byDow = Array.from({length:7},()=>({value:0,count:0}));
+    trades.forEach(t=>{ const d=byDow[new Date(t.closeTime).getDay()]; d.value+=t.pnl; d.count++; });
+    barChart(document.getElementById('dowChart'), dowNames.map((l,i)=>({label:l,value:byDow[i].value,count:byDow[i].count})));
 
-    const byHour = Array.from({length:24},()=>0);
-    trades.forEach(t=>{ byHour[new Date(t.closeTime).getHours()] += t.pnl; });
-    barChart(document.getElementById('hourChart'), byHour.map((v,h)=>({label:(h%3===0? h : ''),value:v})));
+    const byHour = Array.from({length:24},()=>({value:0,count:0}));
+    trades.forEach(t=>{ const h=byHour[new Date(t.closeTime).getHours()]; h.value+=t.pnl; h.count++; });
+    barChart(document.getElementById('hourChart'), byHour.map((v,h)=>({label:(h%3===0? h : ''), tooltipLabel:h+':00', value:v.value, count:v.count})));
+
+    // P&L por mes
+    const byMonth = {};
+    trades.forEach(t=>{ const k=monthKey(t.closeTime); byMonth[k]=byMonth[k]||{value:0,count:0}; byMonth[k].value+=t.pnl; byMonth[k].count++; });
+    const monthKeys = Object.keys(byMonth).sort();
+    barChart(document.getElementById('monthChart'), monthKeys.map(k=>({
+      label: monthLabel(k).split(' ')[0]+' '+monthLabel(k).split(' ')[1].slice(2),
+      tooltipLabel: monthLabel(k), value: byMonth[k].value, count: byMonth[k].count
+    })), {h:200});
+
+    // ganadoras vs perdedoras (donut)
+    const winsCount = trades.filter(t=>t.pnl>0).length, lossesCount = trades.filter(t=>t.pnl<0).length, flatCount = trades.filter(t=>t.pnl===0).length;
+    donutChart(document.getElementById('winLossChart'), [
+      {label:'Ganadoras', value:winsCount, color:'#2dd4a7'},
+      {label:'Perdedoras', value:lossesCount, color:'#ef5b6e'},
+      {label:'Breakeven', value:flatCount, color:'#5c6b80'}
+    ].filter(s=>s.value>0));
+    document.getElementById('winLossLegend').innerHTML =
+      '<span><span class="dot" style="background:#2dd4a7;"></span>Ganadoras '+winsCount+'</span>'+
+      '<span><span class="dot" style="background:#ef5b6e;"></span>Perdedoras '+lossesCount+'</span>'+
+      (flatCount?'<span><span class="dot" style="background:#5c6b80;"></span>Breakeven '+flatCount+'</span>':'');
 
     // por setup (una operación con varias confluencias cuenta en las estadísticas de cada setup que la compone)
     const setupGroups={};
@@ -1350,12 +1529,85 @@
       const buckets=[-3,-2,-1,0,1,2,3,4,5];
       const hist = buckets.map((b,i)=>{
         const next = buckets[i+1];
-        const count = withR.filter(t=> t.rMultiple>=b && (next!=null? t.rMultiple<next : true)).length;
-        return {label:b+'R', value: count};
+        const list = withR.filter(t=> t.rMultiple>=b && (next!=null? t.rMultiple<next : true));
+        return {label:b+'R', value: list.length, count: list.length};
       });
       // el histograma usa barChart pero con conteos siempre positivos -> forzamos color vía value positivo
-      barChart(document.getElementById('rHistChart'), hist.map(h=>({label:h.label, value:h.value})));
+      barChart(document.getElementById('rHistChart'), hist);
     }
+
+    // métricas avanzadas
+    const m = computeMetrics(trades);
+    const advWrap = document.getElementById('advancedMetrics');
+    if(!m){
+      advWrap.innerHTML = '<div class="sub-hint">Sin operaciones todavía.</div>';
+    } else {
+      const recoveryFactor = m.maxDD>0 ? (m.netPnl/m.maxDD) : null;
+      const payoffRatio = m.avgLoss>0 ? (m.avgWin/m.avgLoss) : null;
+      const dayKeys = {}; trades.forEach(t=>{ dayKeys[dayKey(t.closeTime)]=1; });
+      const tradedDays = Object.keys(dayKeys).length;
+      const tradesPerDay = tradedDays ? (trades.length/tradedDays) : 0;
+      const monthEntries = Object.entries(byMonth).map(([k,v])=>[k,v.value]);
+      const bestMonth = monthEntries.length ? monthEntries.reduce((a,b)=>b[1]>a[1]?b:a) : null;
+      const worstMonth = monthEntries.length ? monthEntries.reduce((a,b)=>b[1]<a[1]?b:a) : null;
+      advWrap.innerHTML = [
+        card('RECOVERY FACTOR', recoveryFactor!=null?recoveryFactor.toFixed(2):'—', recoveryFactor!=null&&recoveryFactor>=1?'pos':'', 'Net P&L / Max Drawdown'),
+        card('PAYOFF RATIO', payoffRatio!=null?payoffRatio.toFixed(2):'—', payoffRatio!=null&&payoffRatio>=1?'pos':'', 'Avg Win / Avg Loss'),
+        card('OPERACIONES / DÍA', tradesPerDay.toFixed(1), '', tradedDays+' días operados'),
+        card('MEJOR MES', bestMonth?monthLabel(bestMonth[0]):'—', bestMonth&&bestMonth[1]>=0?'pos':'neg', bestMonth?fmtMoney(bestMonth[1]):''),
+        card('PEOR MES', worstMonth?monthLabel(worstMonth[0]):'—', worstMonth&&worstMonth[1]<0?'neg':'pos', worstMonth?fmtMoney(worstMonth[1]):'')
+      ].join('');
+    }
+
+    renderProjection(trades);
+  }
+
+  // ---------- proyección a futuro (extrapolación estadística simple, no es una garantía de resultados) ----------
+  function renderProjection(trades){
+    const wrap = document.getElementById('projectionPanel');
+    const svg = document.getElementById('projectionChart');
+    if(trades.length < 5){
+      wrap.innerHTML = '<div class="sub-hint">Necesitas al menos 5 operaciones registradas para calcular una proyección.</div>';
+      svg.innerHTML=''; return;
+    }
+    const sorted=[...trades].sort((a,b)=>a.closeTime-b.closeTime);
+    const byDay={};
+    sorted.forEach(t=>{ const k=dayKey(t.closeTime); byDay[k]=(byDay[k]||0)+t.pnl; });
+    const tradedDays = Object.keys(byDay).length;
+    const totalPnl = sorted.reduce((s,t)=>s+t.pnl,0);
+    const avgDaily = totalPnl/tradedDays;
+    const tradesPerDay = sorted.length/tradedDays;
+    const proj = [30,60,90].map(d=>({days:d, val:avgDaily*d}));
+    wrap.innerHTML =
+      '<div class="m">P&amp;L medio/día operado <b class="'+(avgDaily>=0?'pos':'neg')+'">'+fmtMoney(avgDaily)+'</b></div>'+
+      '<div class="m">Operaciones/día <b>'+tradesPerDay.toFixed(1)+'</b></div>'+
+      proj.map(p=>'<div class="m">Proyección '+p.days+' días <b class="'+(p.val>=0?'pos':'neg')+'">'+fmtMoney(p.val)+'</b></div>').join('');
+
+    const W=Math.max(500, svg.parentElement.clientWidth||600), H=200, padL=60, padB=20, padT=10;
+    let cum=0; const realPts = sorted.map((t,i)=>{ cum+=t.pnl; return {x:i,y:cum}; });
+    const lastReal = realPts[realPts.length-1];
+    const projPts = proj.map((p,i)=>({x: realPts.length-1 + (i+1), y: lastReal.y + p.val, days:p.days}));
+    const allPts = realPts.concat(projPts);
+    const minY=Math.min(0,...allPts.map(p=>p.y)), maxY=Math.max(0,...allPts.map(p=>p.y));
+    const range=(maxY-minY)||1;
+    const x = i => padL + (i/(allPts.length-1||1))*(W-padL-10);
+    const y = v => H-padB - ((v-minY)/range)*(H-padB-padT);
+    const realPath='M'+realPts.map(p=>x(p.x)+','+y(p.y)).join(' L');
+    const projPath='M'+x(lastReal.x)+','+y(lastReal.y)+' L'+projPts.map(p=>x(p.x)+','+y(p.y)).join(' L');
+    const gridLines=[minY, minY+range/2, maxY].map(v=>
+      '<line x1="'+padL+'" y1="'+y(v)+'" x2="'+W+'" y2="'+y(v)+'" stroke="#1f2b3d" stroke-width="1"/>'+
+      '<text x="4" y="'+(y(v)+4)+'" fill="#5c6b80" font-size="10">'+fmtMoneyPlain(v)+'</text>'
+    ).join('');
+    const projHits = projPts.map(p=>{
+      const ttHtml = '<b>Proyección a '+p.days+' días</b><br>'+fmtMoney(p.y)+' acumulado estimado';
+      return '<circle class="chart-hit" data-tt="'+esc(ttHtml)+'" cx="'+x(p.x)+'" cy="'+y(p.y)+'" r="6" fill="'+(p.y>=0?'#2dd4a7':'#ef5b6e')+'" opacity="0.85" style="cursor:pointer;"/>';
+    }).join('');
+    svg.setAttribute('viewBox','0 0 '+W+' '+H);
+    svg.innerHTML = gridLines+
+      '<path d="'+realPath+'" fill="none" stroke="'+(lastReal.y>=0?'#2dd4a7':'#ef5b6e')+'" stroke-width="2"/>'+
+      '<path d="'+projPath+'" fill="none" stroke="#8b6cf1" stroke-width="2" stroke-dasharray="5,4"/>'+
+      projHits;
+    attachChartTooltips(svg);
   }
 
   // ---------- modal de trade ----------
@@ -2002,18 +2254,24 @@
     const cfg = getSyncConfig();
     document.getElementById('syncUrl').value = cfg.url || '';
     document.getElementById('syncToken').value = cfg.token || '';
-    if(cfg.lastSync) document.getElementById('syncStatus').textContent = 'Última sincronización: '+new Date(cfg.lastSync).toLocaleString('es-ES');
+    const ue = document.getElementById('syncUrlEmpty'); if(ue) ue.value = cfg.url || '';
+    const te = document.getElementById('syncTokenEmpty'); if(te) te.value = cfg.token || '';
+    if(cfg.lastSync) setSyncStatus('Última sincronización: '+new Date(cfg.lastSync).toLocaleString('es-ES'));
   }
   document.getElementById('syncSaveCfg').addEventListener('click', ()=>{
     const url = document.getElementById('syncUrl').value.trim().replace(/\/$/,'');
     const token = document.getElementById('syncToken').value.trim();
     const cfg = getSyncConfig();
     localStorage.setItem(SYNC_CFG_KEY, JSON.stringify({...cfg, url, token}));
+    loadSyncConfigIntoUI();
     toast('Configuración de sincronización guardada.');
   });
-  function setSyncStatus(msg){ document.getElementById('syncStatus').textContent = msg; }
+  // actualiza el mensaje de estado tanto en Ajustes como en la pantalla vacía (pueden coexistir en el DOM)
+  function setSyncStatus(msg){
+    const a = document.getElementById('syncStatus'); if(a) a.textContent = msg;
+    const b = document.getElementById('syncStatusEmpty'); if(b) b.textContent = msg;
+  }
   document.getElementById('syncPushBtn').addEventListener('click', async ()=>{
-    const cfg = getSyncConfig();
     const url = document.getElementById('syncUrl').value.trim().replace(/\/$/,'');
     const token = document.getElementById('syncToken').value.trim();
     if(!url || !token){ toast('Rellena la URL y el token del Worker primero.'); return; }
@@ -2028,15 +2286,16 @@
       if(!res.ok) throw new Error('HTTP '+res.status);
       const now = Date.now();
       localStorage.setItem(SYNC_CFG_KEY, JSON.stringify({url, token, lastSync: now}));
+      loadSyncConfigIntoUI();
       setSyncStatus('Última sincronización: '+new Date(now).toLocaleString('es-ES'));
       toast('Datos subidos a la nube.');
     }catch(err){ setSyncStatus(''); toast('Error al subir: '+err.message); }
   });
-  document.getElementById('syncPullBtn').addEventListener('click', async ()=>{
-    const url = document.getElementById('syncUrl').value.trim().replace(/\/$/,'');
-    const token = document.getElementById('syncToken').value.trim();
+  // lógica de descarga compartida entre el botón de Ajustes y el de la pantalla vacía
+  async function pullFromCloud(url, token){
     if(!url || !token){ toast('Rellena la URL y el token del Worker primero.'); return; }
-    if(!confirm('Esto sobrescribirá los datos de este navegador con los que hay guardados en la nube. ¿Continuar?')) return;
+    const hasLocalData = rawRows.length || perfRows.length || manualTrades.length || Object.keys(dailyJournal).length || notesList.length;
+    if(hasLocalData && !confirm('Esto sobrescribirá los datos de este navegador con los que hay guardados en la nube. ¿Continuar?')) return;
     setSyncStatus('Descargando...');
     try{
       const res = await fetch(url+'/data', { headers:{'X-Auth-Token': token} });
@@ -2057,9 +2316,23 @@
       renderNotes();
       const now = Date.now();
       localStorage.setItem(SYNC_CFG_KEY, JSON.stringify({url, token, lastSync: now}));
+      loadSyncConfigIntoUI();
       setSyncStatus('Última sincronización: '+new Date(now).toLocaleString('es-ES'));
       toast('Datos descargados de la nube.');
     }catch(err){ setSyncStatus(''); toast('Error al descargar: '+err.message); }
+  }
+  document.getElementById('syncPullBtn').addEventListener('click', ()=>{
+    const url = document.getElementById('syncUrl').value.trim().replace(/\/$/,'');
+    const token = document.getElementById('syncToken').value.trim();
+    pullFromCloud(url, token);
+  });
+  document.getElementById('syncPullBtnEmpty').addEventListener('click', ()=>{
+    const url = document.getElementById('syncUrlEmpty').value.trim().replace(/\/$/,'');
+    const token = document.getElementById('syncTokenEmpty').value.trim();
+    // guarda ya lo escrito aunque la descarga falle, para no perder el dato en este dispositivo nuevo
+    const cfg = getSyncConfig();
+    localStorage.setItem(SYNC_CFG_KEY, JSON.stringify({...cfg, url, token}));
+    pullFromCloud(url, token);
   });
   loadSyncConfigIntoUI();
 
